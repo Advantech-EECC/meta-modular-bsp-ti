@@ -1,0 +1,12 @@
+Select ECU-1270-53A1 (ecu1270-2g) DDR timings for the R5 SPL
+
+Upstream-Status: Inappropriate
+
+--- a/arch/arm/dts/k3-j722s-r5-evm.dts
++++ b/arch/arm/dts/k3-j722s-r5-evm.dts
+@@ -9,4 +9,4 @@
+ 
+-#include "k3-j722s-ddr-lp4-50-4000.dtsi"
++#include "k3-j722s-ddr-lp4-2g.dtsi"
+ #include "k3-am62a-ddr.dtsi"
+ 

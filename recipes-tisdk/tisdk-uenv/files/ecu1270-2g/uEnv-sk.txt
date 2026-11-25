@@ -1,0 +1,1 @@
+uenvcmd=setenv args_all $args_all systemd.hostname=ecu1270-2g

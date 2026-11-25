@@ -1,0 +1,198 @@
+From 5dfaef956b0fe88623f85d3d8c224b330faa9d57 Mon Sep 17 00:00:00 2001
+From: Samuel Cheng <samuelogre@gmail.com>
+Date: Wed, 17 Dec 2025 14:06:16 +0800
+Subject: [PATCH] source code mod for ECU1270
+
+20261126: removed RAUC handling (it will be added separately)
+
+---
+ arch/arm/include/asm/handoff.h |  1 +
+ arch/arm/mach-k3/common.c      |  9 +++++++++
+ board/ti/j722s/evm.c           | 78 +++++++++++++++++++++++++++++++++++++++++-------------------------------------
+ include/configs/j722s_evm.h    | 26 ++++++++++++++++++++++++++
+ 4 files changed, 77 insertions(+), 37 deletions(-)
+
+diff --git a/arch/arm/include/asm/handoff.h b/arch/arm/include/asm/handoff.h
+index 0790d2ab1e2..cf1e90fb438 100644
+--- a/arch/arm/include/asm/handoff.h
++++ b/arch/arm/include/asm/handoff.h
+@@ -16,6 +16,7 @@
+  */
+ struct arch_spl_handoff {
+ 	ulong usable_ram_top;
++	u32 boot_device;
+ };
+ 
+ #endif
+diff --git a/arch/arm/mach-k3/common.c b/arch/arm/mach-k3/common.c
+index 59601908d2c..de15da23636 100644
+--- a/arch/arm/mach-k3/common.c
++++ b/arch/arm/mach-k3/common.c
+@@ -661,6 +661,15 @@ void setup_qos(void)
+ }
+ #endif
+ 
++#if CONFIG_IS_ENABLED(HANDOFF)
++int handoff_arch_save(struct spl_handoff *ho)
++{
++	ho->arch.boot_device = spl_boot_device();
++	printf("Current boot device id is 0x%x\n",spl_boot_device());
++	return 0;
++}
++#endif
++
+ int shutdown_mcu_r5_core1(void)
+ {
+ 	struct ti_sci_handle *ti_sci = get_ti_sci_handle();
+diff --git a/board/ti/j722s/evm.c b/board/ti/j722s/evm.c
+index 46d598aadb8..e58ac3a6a9c 100644
+--- a/board/ti/j722s/evm.c
++++ b/board/ti/j722s/evm.c
+@@ -16,7 +16,6 @@
+ #include <fdt_support.h>
+ #include <spl.h>
+ #include <asm/arch/k3-ddr.h>
+-#include "../common/fdt_ops.h"
+ 
+ ofnode cadence_qspi_get_subnode(struct udevice *dev)
+ {
+@@ -29,44 +28,9 @@ ofnode cadence_qspi_get_subnode(struct udevice *dev)
+ 	return dev_read_first_subnode(dev);
+ }
+ 
+-/* Enables the spi-nand dts node, if onboard mux is set to spinand */
+-static void __maybe_unused detect_enable_spinand(void *blob)
+-{
+-	if (IS_ENABLED(CONFIG_DM_GPIO) && IS_ENABLED(CONFIG_OF_LIBFDT)) {
+-		struct gpio_desc desc = {0};
+-		char *ospi_mux_sel_gpio = "gpio@23_1";
+-		int nand_offset, nor_offset;
+-
+-		if (dm_gpio_lookup_name(ospi_mux_sel_gpio, &desc))
+-			return;
+-
+-		if (dm_gpio_request(&desc, ospi_mux_sel_gpio))
+-			return;
+-
+-		if (dm_gpio_set_dir_flags(&desc, GPIOD_IS_IN))
+-			return;
+-
+-		nand_offset = fdt_node_offset_by_compatible(blob, -1, "spi-nand");
+-		if (nand_offset < 0)
+-			return;
+-
+-		nor_offset = fdt_node_offset_by_compatible(blob,
+-							   fdt_parent_offset(blob, nand_offset),
+-							   "jedec,spi-nor");
+-
+-		if (dm_gpio_get_value(&desc)) {
+-			fdt_status_okay(blob, nand_offset);
+-			fdt_del_node(blob, nor_offset);
+-		} else {
+-			fdt_del_node(blob, nand_offset);
+-		}
+-	}
+-}
+-
+ #if defined(CONFIG_OF_LIBFDT) && defined(CONFIG_OF_BOARD_SETUP)
+ int ft_board_setup(void *blob, struct bd_info *bd)
+ {
+-	detect_enable_spinand(blob);
+ 
+ 	return 0;
+ }
+@@ -87,7 +51,6 @@ void spl_perform_fixups(struct spl_image_info *spl_image)
+ 		fixup_memory_node(spl_image);
+ 	}
+ 
+-	detect_enable_spinand(spl_image->fdt_addr);
+ }
+ #endif
+ 
+@@ -95,10 +58,51 @@ void spl_perform_fixups(struct spl_image_info *spl_image)
+ int board_late_init(void)
+ {
+ 	ti_set_fdt_env(NULL, NULL);
++
++#if CONFIG_IS_ENABLED(HANDOFF)
++	/* Read peripheral SPL was loaded from */
++	if (gd->spl_handoff) {
++		switch (gd->spl_handoff->arch.boot_device) {
++			case BOOT_DEVICE_MMC1:
++				printf("[uboot] Current boot device id is %x\n",gd->spl_handoff->arch.boot_device);
++				env_set("mmcdev", "0");
++				break;
++			case BOOT_DEVICE_MMC2:
++				printf("[uboot] Current boot device id is %x\n",gd->spl_handoff->arch.boot_device);
++				env_set("mmcdev", "1");
++				break;
++			default:
++				break;
++		}
++	}
++#endif
+ 	return 0;
+ }
+ #endif
+ 
++int mmc_get_env_dev(void)
++{
++	int mmcdev = 0;
++#if CONFIG_IS_ENABLED(HANDOFF)
++	/* Read peripheral SPL was loaded from */
++	if (gd->spl_handoff) {
++		switch (gd->spl_handoff->arch.boot_device) {
++			case BOOT_DEVICE_MMC1:
++				printf("[uboot] Current boot device id is %x\n",gd->spl_handoff->arch.boot_device);
++				mmcdev = 0;
++				break;
++			case BOOT_DEVICE_MMC2:
++				printf("[uboot] Current boot device id is %x\n",gd->spl_handoff->arch.boot_device);
++				mmcdev = 1;
++				break;
++			default:
++				break;
++		}
++	}
++#endif
++	return mmcdev;
++}
++
+ #if IS_ENABLED(CONFIG_SPL_BOARD_INIT)
+ void spl_board_init(void)
+ {
+diff --git a/include/configs/j722s_evm.h b/include/configs/j722s_evm.h
+index 10f2e2d3edc..9edcacb031f 100644
+--- a/include/configs/j722s_evm.h
++++ b/include/configs/j722s_evm.h
+@@ -11,4 +11,30 @@
+ /* Now for the remaining common defines */
+ #include <configs/ti_armv7_common.h>
+ 
++#define FITIMAGEFILE_DEFAULT        "conf-ti_ecu1270-2g.dtb"
++
++/* Initial environment variables */
++
++#define CFG_COMMON_ENV_SETTINGS \
++    "name_fit_config="FITIMAGEFILE_DEFAULT"\0" \
++    "loadfitimage=ext4load mmc ${mmcdev}:${mmcpart} ${addr_fit} boot/${name_fit};bootm ${addr_fit}#${name_fit_config}\0"
++
++#define CFG_NORMAL_SCRIPT_SETTINGS \
++    "set_normal_args_mmc=" \
++        "setenv bootargs console=${console} " \
++            "root=/dev/mmcblk${mmcdev}p${mmcpart} " \
++            "rw rootfstype=ext4 rootwait\0" \
++    "normal_bootcmd=" \
++        "echo 'Running NORMAL bootcmd ...'; " \
++        "setenv mmcpart 2; " \
++        "run set_normal_args_mmc; " \
++        "printenv bootargs; " \
++        "run loadfitimage;\0"
++
++#define CFG_EXTRA_ENV_SETTINGS \
++        CFG_COMMON_ENV_SETTINGS \
++        CFG_NORMAL_SCRIPT_SETTINGS
++
++#define CONFIG_SYS_USB_FAT_BOOT_PARTITION 1
++
+ #endif /* __CONFIG_J722S_EVM_H */
